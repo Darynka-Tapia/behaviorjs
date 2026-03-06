@@ -3,24 +3,51 @@ import { trackMissClick } from '../metrics/missclicks.js';
 import { trackScrollDepth } from '../metrics/scroll.js';
 import { initIdleTracker } from '../metrics/idle.js';
 
+// --- NUEVAS INTERFACES PARA EL CONSTRUCTOR ---
+interface TrackerProviders {
+  discord?: string;
+  slack?: string;
+  telegram?: {
+    token: string;
+    chatId: string;
+  };
+}
+
+interface TrackerConfig {
+  targets: string[];
+  providers?: TrackerProviders; 
+  debug?: boolean;
+}
+
 export class BehaviorTracker {
   private startTime: number;
-  private targets: string[];
+  private config: TrackerConfig; 
   private capturedTTA: Set<string> = new Set();
   private sessionLogs: any[] = [];
   private lastMilestoneReached: number = 0;
   private totalIdleAccumulated: number = 0;
 
-  constructor(targets: string[] = ['cta']) {
+  /**
+   * Constructor con soporte híbrido para evitar errores de build
+   * Acepta: new BehaviorTracker(['target']) 
+   * O acepta: new BehaviorTracker({ targets: ['target'], debug: true })
+   */
+  constructor(configOrTargets: TrackerConfig | string[]) {
     this.startTime = performance.now();
-    this.targets = targets;
+
+    // Normalización de la configuración
+    if (Array.isArray(configOrTargets)) {
+      this.config = { targets: configOrTargets };
+    } else {
+      this.config = configOrTargets;
+    }
     
     initIdleTracker((isIdle, duration) => {
       if (isIdle) {
-        console.log("%c💤 [Behavior.js] Status: Usuario Inactivo", "color: #9ca3af");
+        if (this.config.debug) console.log("%c💤 [Behavior.js] Status: Usuario Inactivo", "color: #9ca3af");
       } else {
         this.totalIdleAccumulated += duration;
-        console.log(`%c✨ [Behavior.js] Status: Usuario regresó (Ausente: ${(duration/1000).toFixed(2)}s)`, "color: #10b981");
+        if (this.config.debug) console.log(`%c✨ [Behavior.js] Status: Usuario regresó (Ausente: ${(duration/1000).toFixed(2)}s)`, "color: #10b981");
       }
     });
 
@@ -28,14 +55,12 @@ export class BehaviorTracker {
   }
 
   private setupExitListener(): void {
-    // Detectar cuando el usuario cambia de pestaña o cierra
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         this.sendReport();
       }
     });
 
-    // Respaldo para cierre de ventana
     window.addEventListener('beforeunload', () => {
       this.sendReport();
     });
@@ -63,11 +88,11 @@ export class BehaviorTracker {
   }
 
   public start(): void {
-    console.log("🛡️ Behavior.js: Monitor activo. Rastreando:", this.targets);
+    if (this.config.debug) console.log("🛡️ Behavior.js: Monitor activo. Rastreando:", this.config.targets);
 
     window.addEventListener('mouseover', (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      this.targets.forEach(name => {
+      this.config.targets.forEach(name => {
         const container = target.closest(`[data-behavior="${name}"]`);
         if (container) {
           trackHoverStart(name, this.startTime);
@@ -76,13 +101,13 @@ export class BehaviorTracker {
     }, { passive: true });
 
     window.addEventListener('click', (event: MouseEvent) => {
-      const ttaResult = calculateTTA(event, this.targets, this.startTime, this.capturedTTA);
+      const ttaResult = calculateTTA(event, this.config.targets, this.startTime, this.capturedTTA);
       if (ttaResult) {
         this.capturedTTA.add(ttaResult.action);
         this.addLog('tta', ttaResult);
       }
 
-      const mcResult = trackMissClick(event, this.targets);
+      const mcResult = trackMissClick(event, this.config.targets);
       if (mcResult) {
         this.addLog('missclick', mcResult);
       }
@@ -107,28 +132,20 @@ export class BehaviorTracker {
     };
     
     this.sessionLogs.push(entry);
-    const color = type === 'missclick' ? '#ff4757' : type === 'tta' ? '#2ed573' : '#1e90ff';
-    console.log(`%c📊 [Behavior.js] ${type.toUpperCase()}:`, `color: ${color}; font-weight: bold;`, data);
+    
+    if (this.config.debug) {
+        const color = type === 'missclick' ? '#ff4757' : type === 'tta' ? '#2ed573' : '#1e90ff';
+        console.log(`%c📊 [Behavior.js] ${type.toUpperCase()}:`, `color: ${color}; font-weight: bold;`, data);
+    }
   }
 
-  /**
-   * Genera el JSON final con el resumen Y todas las acciones detalladas
-   */
-  public sendReport(): void {
+  public async sendReport(): Promise<void> {
     if (this.sessionLogs.length === 0) return;
 
-    // 1. Cálculos de promedios para el resumen rápido
     const ttaEvents = this.sessionLogs.filter(l => l.type === 'tta');
-    
-    const avgDiscovery = ttaEvents.length > 0 
-      ? ttaEvents.reduce((acc, curr) => acc + curr.visualDiscoveryMs, 0) / ttaEvents.length 
-      : 0;
+    const avgDiscovery = ttaEvents.length > 0 ? ttaEvents.reduce((acc, curr) => acc + curr.visualDiscoveryMs, 0) / ttaEvents.length : 0;
+    const avgHesitation = ttaEvents.length > 0 ? ttaEvents.reduce((acc, curr) => acc + curr.cognitiveHesitationMs, 0) / ttaEvents.length : 0;
 
-    const avgHesitation = ttaEvents.length > 0 
-      ? ttaEvents.reduce((acc, curr) => acc + curr.cognitiveHesitationMs, 0) / ttaEvents.length 
-      : 0;
-
-    // 2. Construcción del objeto de reporte completo
     const report = {
       metadata: {
         date: new Date().toISOString(),
@@ -146,25 +163,44 @@ export class BehaviorTracker {
         avgVisualDiscoveryMs: Math.round(avgDiscovery),
         avgCognitiveHesitationMs: Math.round(avgHesitation)
       },
-      // AQUÍ ESTÁ TODO EL RASTRO DE ACCIONES:
       events: this.sessionLogs 
     };
 
-    // 3. Persistencia en LocalStorage (Mantenemos historial de 10 sesiones)
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const fileName = `session-${Date.now()}.json`;
+
+    if (this.config.providers) {
+      if (this.config.providers.discord) {
+        const fd = new FormData();
+        fd.append('content', `📊 **Behavior.js:** Nueva sesión de ${report.metadata.screenSize}`);
+        fd.append('file', blob, fileName);
+        fetch(this.config.providers.discord, { method: 'POST', body: fd, keepalive: true });
+      }
+
+      if (this.config.providers.telegram) {
+        const { token, chatId } = this.config.providers.telegram;
+        const fd = new FormData();
+        fd.append('chat_id', chatId);
+        fd.append('document', blob, fileName);
+        fd.append('caption', `📊 *Behavior.js:* Nueva sesión\nAcciones: ${report.summary.successfulActionsCount}`);
+        fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: fd, keepalive: true });
+      }
+
+      if (this.config.providers.slack) {
+        fetch(this.config.providers.slack, {
+          method: 'POST',
+          body: JSON.stringify({ text: `📊 *Behavior.js*: Nueva sesión detectada en ${window.location.hostname}` }),
+          keepalive: true
+        });
+      }
+    }
+
     try {
       const history = JSON.parse(localStorage.getItem('behavior_history') || '[]');
       history.push(report);
-      // Guardamos las últimas 10 para no saturar el storage
       localStorage.setItem('behavior_history', JSON.stringify(history.slice(-10)));
-    } catch (e) {
-      console.error("Error guardando reporte en LocalStorage", e);
-    }
-    
-    // 4. Feedback visual en consola para tus pruebas
-    console.group("📦 BEHAVIOR.JS: REPORTE DE SESIÓN COMPLETO");
-    console.log("Resumen Ejecutivo:", report.summary);
-    console.log("Timeline de Acciones:", report.events); // Aquí verás cada clic y tta
-    console.log("Estado: Guardado en behavior_history");
-    console.groupEnd();
+    } catch (e) {}
+
+    if (this.config.debug) console.log("✅ Reporte procesado y enviado.");
   }
 }
