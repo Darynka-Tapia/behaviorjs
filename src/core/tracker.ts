@@ -9,15 +9,12 @@ export class BehaviorTracker {
   private capturedTTA: Set<string> = new Set();
   private sessionLogs: any[] = [];
   private lastMilestoneReached: number = 0;
-  
-  // Para el cálculo de tiempo real (descontando inactividad)
   private totalIdleAccumulated: number = 0;
 
   constructor(targets: string[] = ['cta']) {
     this.startTime = performance.now();
     this.targets = targets;
     
-    // 1. Iniciamos el sensor de inactividad
     initIdleTracker((isIdle, duration) => {
       if (isIdle) {
         console.log("%c💤 [Behavior.js] Status: Usuario Inactivo", "color: #9ca3af");
@@ -30,35 +27,29 @@ export class BehaviorTracker {
     this.setupExitListener();
   }
 
-  /**
-   * Configura los eventos para detectar cuándo el usuario deja la página
-   */
   private setupExitListener(): void {
+    // Detectar cuando el usuario cambia de pestaña o cierra
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
-        // this.sendReport();
+        this.sendReport();
       }
     });
 
+    // Respaldo para cierre de ventana
     window.addEventListener('beforeunload', () => {
-      // this.sendReport();
+      this.sendReport();
     });
   }
 
-  /**
-   * Configura el rastreo de scroll por hitos (25%, 50%, 75%, 100%)
-   */
   private setupScrollListener(): void {
     window.addEventListener('scroll', () => {
       const scrollData = trackScrollDepth();
-      
       if (scrollData) {
         const milestones = [25, 50, 75, 100];
         const currentMilestone = milestones.filter(m => scrollData.maxPercentage >= m).pop();
 
         if (currentMilestone && currentMilestone > this.lastMilestoneReached) {
           this.lastMilestoneReached = currentMilestone;
-          
           const timeSinceStart = ((performance.now() - this.startTime) / 1000).toFixed(2);
 
           this.addLog('scroll', {
@@ -71,33 +62,21 @@ export class BehaviorTracker {
     }, { passive: true });
   }
 
-  /**
-   * Inicia el monitoreo global
-   */
   public start(): void {
     console.log("🛡️ Behavior.js: Monitor activo. Rastreando:", this.targets);
 
-    // 1. Escuchador de Hover (Sella el descubrimiento visual al entrar)
     window.addEventListener('mouseover', (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       this.targets.forEach(name => {
         const container = target.closest(`[data-behavior="${name}"]`);
         if (container) {
-          // CLAVE: Pasamos startTime para congelar el descubrimiento visual
           trackHoverStart(name, this.startTime);
         }
       });
     }, { passive: true });
 
-    // 2. Escuchador de Clics (TTA y Miss-clicks)
     window.addEventListener('click', (event: MouseEvent) => {
-      const ttaResult = calculateTTA(
-        event, 
-        this.targets, 
-        this.startTime, 
-        this.capturedTTA
-      );
-
+      const ttaResult = calculateTTA(event, this.targets, this.startTime, this.capturedTTA);
       if (ttaResult) {
         this.capturedTTA.add(ttaResult.action);
         this.addLog('tta', ttaResult);
@@ -112,14 +91,9 @@ export class BehaviorTracker {
     this.setupScrollListener();
   }
 
-  /**
-   * Registra internamente un evento y lo muestra en consola en tiempo real
-   */
   private addLog(type: string, data: any): void {
     const now = performance.now();
     const rawTime = now - this.startTime;
-    
-    // Métrica estrella: Tiempo real descontando inactividad
     const activeTime = rawTime - this.totalIdleAccumulated;
 
     const entry = {
@@ -133,17 +107,28 @@ export class BehaviorTracker {
     };
     
     this.sessionLogs.push(entry);
-    
     const color = type === 'missclick' ? '#ff4757' : type === 'tta' ? '#2ed573' : '#1e90ff';
     console.log(`%c📊 [Behavior.js] ${type.toUpperCase()}:`, `color: ${color}; font-weight: bold;`, data);
   }
 
   /**
-   * Genera el JSON final con toda la data de la sesión
+   * Genera el JSON final con el resumen Y todas las acciones detalladas
    */
-  /*private sendReport(): void {
+  public sendReport(): void {
     if (this.sessionLogs.length === 0) return;
 
+    // 1. Cálculos de promedios para el resumen rápido
+    const ttaEvents = this.sessionLogs.filter(l => l.type === 'tta');
+    
+    const avgDiscovery = ttaEvents.length > 0 
+      ? ttaEvents.reduce((acc, curr) => acc + curr.visualDiscoveryMs, 0) / ttaEvents.length 
+      : 0;
+
+    const avgHesitation = ttaEvents.length > 0 
+      ? ttaEvents.reduce((acc, curr) => acc + curr.cognitiveHesitationMs, 0) / ttaEvents.length 
+      : 0;
+
+    // 2. Construcción del objeto de reporte completo
     const report = {
       metadata: {
         date: new Date().toISOString(),
@@ -153,20 +138,33 @@ export class BehaviorTracker {
       },
       summary: {
         totalTimeSeconds: Number(((performance.now() - this.startTime) / 1000).toFixed(2)),
-        totalIdleTime: (this.totalIdleAccumulated / 1000).toFixed(2) + 's',
+        totalIdleTimeMs: Math.round(this.totalIdleAccumulated),
         totalEvents: this.sessionLogs.length,
-        missClicks: this.sessionLogs.filter(l => l.type === 'missclick').length,
-        successfulActions: this.capturedTTA.size,
-        maxScrollDepth: `${this.lastMilestoneReached}%`
+        missClicksCount: this.sessionLogs.filter(l => l.type === 'missclick').length,
+        successfulActionsCount: this.capturedTTA.size,
+        maxScrollDepthReached: `${this.lastMilestoneReached}%`,
+        avgVisualDiscoveryMs: Math.round(avgDiscovery),
+        avgCognitiveHesitationMs: Math.round(avgHesitation)
       },
-      events: this.sessionLogs
+      // AQUÍ ESTÁ TODO EL RASTRO DE ACCIONES:
+      events: this.sessionLogs 
     };
 
-    console.group("📦 BEHAVIOR.JS: REPORTE DE SESIÓN FINAL");
-    console.log("Copia este JSON para analizarlo en tu dashboard:");
-    console.log(JSON.stringify(report, null, 2));
+    // 3. Persistencia en LocalStorage (Mantenemos historial de 10 sesiones)
+    try {
+      const history = JSON.parse(localStorage.getItem('behavior_history') || '[]');
+      history.push(report);
+      // Guardamos las últimas 10 para no saturar el storage
+      localStorage.setItem('behavior_history', JSON.stringify(history.slice(-10)));
+    } catch (e) {
+      console.error("Error guardando reporte en LocalStorage", e);
+    }
+    
+    // 4. Feedback visual en consola para tus pruebas
+    console.group("📦 BEHAVIOR.JS: REPORTE DE SESIÓN COMPLETO");
+    console.log("Resumen Ejecutivo:", report.summary);
+    console.log("Timeline de Acciones:", report.events); // Aquí verás cada clic y tta
+    console.log("Estado: Guardado en behavior_history");
     console.groupEnd();
-
-    localStorage.setItem('behavior_last_report', JSON.stringify(report));
-  }*/
+  }
 }
