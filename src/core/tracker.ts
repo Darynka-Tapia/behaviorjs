@@ -1,38 +1,109 @@
+import { calculateTTA } from '../metrics/tta.js';
+import { trackMissClick } from '../metrics/missclicks.js';
+
 export class BehaviorTracker {
   private startTime: number;
-  private hasCapturedAction: boolean = false;
+  private targets: string[];
+  private capturedTTA: Set<string> = new Set();
+  private sessionLogs: any[] = [];
 
-  constructor() {
+  constructor(targets: string[] = ['cta']) {
     this.startTime = performance.now();
+    this.targets = targets;
+    
+    // Inicializamos los escuchadores de salida
+    this.setupExitListener();
   }
 
+  /**
+   * Configura los eventos para detectar cuándo el usuario deja la página
+   * y así poder imprimir el reporte final.
+   */
+  private setupExitListener(): void {
+    // Detecta cuando la pestaña se oculta (más fiable en móviles)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        // his.sendReport();
+      }
+    });
+
+    // Detecta el cierre o recarga de la pestaña
+    window.addEventListener('beforeunload', () => {
+      // this.sendReport();
+    });
+  }
+
+  /**
+   * Inicia el monitoreo global de clics
+   */
   public start(): void {
-    console.log("🚀 Behavior.js: Buscando el Call-to-Action...");
+    console.log("🛡️ Behavior.js: Monitor activo. Rastreando:", this.targets);
 
     window.addEventListener('click', (event: MouseEvent) => {
-      if (this.hasCapturedAction) return;
+      // 1. Intentar capturar Time-to-Action
+      const ttaResult = calculateTTA(
+        event, 
+        this.targets, 
+        this.startTime, 
+        this.capturedTTA
+      );
 
-      // Buscamos el elemento que tenga el atributo 'data-behavior="cta"'
-      const target = event.target as HTMLElement;
-      const ctaElement = target.closest('[data-behavior="cta"]');
+      if (ttaResult) {
+        this.capturedTTA.add(ttaResult.action);
+        this.addLog('tta', ttaResult);
+      }
 
-      if (ctaElement) {
-        this.hasCapturedAction = true;
-        const tta = performance.now() - this.startTime;
-
-        console.log(`🎯 CTA detectado!`);
-        
-        this.dispatchMetric('time-to-action', {
-          milliseconds: Math.round(tta),
-          element: ctaElement.tagName.toLowerCase(),
-          // Capturamos el ID o una clase para saber CUÁL botón fue
-          identifier: ctaElement.id || ctaElement.className || 'unnamed-cta'
-        });
+      // 2. Intentar capturar Miss-click
+      const mcResult = trackMissClick(event, this.targets);
+      if (mcResult) {
+        this.addLog('missclick', mcResult);
       }
     });
   }
 
-  private dispatchMetric(type: string, data: any): void {
-    console.log(`📊 [Métrica] ${type}:`, data);
+  /**
+   * Registra internamente un evento y lo muestra en consola en tiempo real
+   */
+  private addLog(type: string, data: any): void {
+    const entry = {
+      type,
+      ...data,
+      timestamp: new Date().toISOString()
+    };
+    
+    this.sessionLogs.push(entry);
+    console.log(`📊 [Behavior.js] ${type.toUpperCase()}:`, data);
   }
+
+  /**
+   * Genera el JSON final con toda la data de la sesión
+   */
+  /*private sendReport(): void {
+    if (this.sessionLogs.length === 0) return;
+
+    const report = {
+      metadata: {
+        date: new Date().toISOString(),
+        url: window.location.href,
+        screenSize: `${window.innerWidth}x${window.innerHeight}`,
+        userAgent: navigator.userAgent
+      },
+      summary: {
+        totalTimeSeconds: Number(((performance.now() - this.startTime) / 1000).toFixed(2)),
+        totalEvents: this.sessionLogs.length,
+        missClicks: this.sessionLogs.filter(l => l.type === 'missclick').length,
+        successfulActions: this.capturedTTA.size
+      },
+      events: this.sessionLogs
+    };
+
+    // Imprimimos el resultado para que el desarrollador lo copie
+    console.group("📦 BEHAVIOR.JS: REPORTE DE SESIÓN FINAL");
+    console.log("Copia este JSON para analizarlo en tu dashboard:");
+    console.log(JSON.stringify(report, null, 2));
+    console.groupEnd();
+
+    // Guardado preventivo en LocalStorage
+    localStorage.setItem('behavior_last_report', JSON.stringify(report));
+  }*/
 }
