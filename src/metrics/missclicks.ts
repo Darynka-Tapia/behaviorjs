@@ -1,27 +1,47 @@
 let lastClickTime = 0;
 let clickCount = 0;
 let lastTarget: HTMLElement | null = null;
+// Guardamos la referencia al último objeto de missclick generado
+let lastGeneratedMissClick: any = null; 
+const SESSION_THRESHOLD = 2000; // 2 segundos para separar ráfagas
 
 export const trackMissClick = (event: MouseEvent, targets: string[]) => {
   const target = event.target as HTMLElement;
   const now = Date.now();
 
-  // 1. Lógica de Rage Click
-  if (target === lastTarget && (now - lastClickTime) < 500) {
-    clickCount++;
-  } else {
-    clickCount = 1;
-  }
-  lastClickTime = now;
-  lastTarget = target;
+  // 1. Lógica de Rage Click y Acumulación
+  const isSameTarget = target === lastTarget;
+  const isWithinSession = (now - lastClickTime) < SESSION_THRESHOLD;
 
-  // 2. Filtros de exclusión
+  if (isSameTarget && (now - lastClickTime) < 500) {
+    clickCount++;
+  } else if (!isSameTarget || !isWithinSession) {
+    // Si cambió el target o pasó mucho tiempo, reseteamos contador
+    clickCount = 1;
+  } else {
+    // Es el mismo target dentro de la sesión, pero no necesariamente un "rage" (clic lento)
+    clickCount++;
+  }
+
+  // 2. Filtros de exclusión (Se mantienen igual)
   const isNative = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
   const isCustomTarget = targets.some(name => target.closest(`[data-behavior="${name}"]`));
   const isExplicitlyInteractive = target.closest('[data-behavior="interactive"]');
 
   if (isNative || isCustomTarget || isExplicitlyInteractive) {
+    lastGeneratedMissClick = null; // Limpiamos rastro si interactúa con algo válido
     return null;
+  }
+
+  // Si es el mismo elemento y estamos dentro del umbral de tiempo, 
+  // actualizamos el objeto anterior en lugar de crear uno nuevo
+  if (isSameTarget && isWithinSession && lastGeneratedMissClick) {
+    lastGeneratedMissClick.timestamp = now; // Actualizamos al último clic
+    lastGeneratedMissClick.behavior.clickSequence = clickCount;
+    lastGeneratedMissClick.behavior.isRageClick = clickCount >= 3;
+    
+    // Devolvemos un flag o el objeto con una propiedad 'updated' 
+    return { ...lastGeneratedMissClick, isUpdate: true };
   }
 
   // --- FUNCIÓN DE ANÁLISIS REUTILIZABLE ---
@@ -41,7 +61,6 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
       borderRadius: style.borderRadius,
       backgroundColor: style.backgroundColor,
       isDraggable: ['grab', 'grabbing', 'move'].includes(style.cursor),
-      // Es un affordance si tiene (radio + sombra/borde) o cursor pointer
       isVisualAffordance: (hasRadius && (hasShadow || hasBorder)) || hasPointer
     };
   };
@@ -52,7 +71,6 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
   let measuredFromParent = false;
   let visualContainer = target;
 
-  // Si el hijo NO parece interactivo, probamos con el padre
   if (!childMetrics.isVisualAffordance && target.parentElement) {
     const parentMetrics = getStyleMetrics(target.parentElement);
     if (parentMetrics.isVisualAffordance) {
@@ -62,7 +80,8 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     }
   }
 
-  return {
+  // 4. CREACIÓN DE NUEVO EVENTO
+  const newMissClick = {
     type: 'missclick',
     timestamp: now,
     element: {
@@ -82,7 +101,7 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
       clickSequence: clickCount
     },
     affordanceCheck: {
-      measuredFromParent: measuredFromParent, // Aquí indicamos si tuvimos que subir al padre
+      measuredFromParent: measuredFromParent,
       hasPointerCursor: finalMetrics.hasPointer,
       isDraggableCursor: finalMetrics.isDraggable,
       hasVisualAffordance: finalMetrics.isVisualAffordance,
@@ -93,6 +112,13 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     },
     location: { x: event.clientX, y: event.clientY }
   };
+
+  // Guardamos referencia y actualizamos variables de control
+  lastClickTime = now;
+  lastTarget = target;
+  lastGeneratedMissClick = newMissClick;
+
+  return newMissClick;
 };
 
 function getSimplePath(el: HTMLElement): string {
