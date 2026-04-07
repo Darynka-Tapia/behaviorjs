@@ -2,52 +2,32 @@ import { calculateTTA, trackHoverStart } from '../metrics/tta.js';
 import { trackMissClick } from '../metrics/missclicks.js';
 import { trackScrollDepth } from '../metrics/scroll.js';
 import { initIdleTracker } from '../metrics/idle.js';
-
-// --- NUEVAS INTERFACES PARA EL CONSTRUCTOR ---
-interface TrackerProviders {
-  discord?: string;
-  slack?: string;
-  telegram?: {
-    token: string;
-    chatId: string;
-  };
-}
-
-interface TrackerConfig {
-  targets: string[];
-  providers?: TrackerProviders; 
-  debug?: boolean;
-}
+import { getNavigationMetrics } from '../metrics/navigation.js'; // Importación de la nueva métrica
+import type { TrackerConfig } from '../utils/interfaces.js';
 
 export class BehaviorTracker {
   private startTime: number;
-  private config: TrackerConfig; 
+  private config: TrackerConfig;
   private capturedTTA: Set<string> = new Set();
   private sessionLogs: any[] = [];
   private lastMilestoneReached: number = 0;
   private totalIdleAccumulated: number = 0;
 
-  /**
-   * Constructor con soporte híbrido para evitar errores de build
-   * Acepta: new BehaviorTracker(['target']) 
-   * O acepta: new BehaviorTracker({ targets: ['target'], debug: true })
-   */
   constructor(configOrTargets: TrackerConfig | string[]) {
     this.startTime = performance.now();
 
-    // Normalización de la configuración
     if (Array.isArray(configOrTargets)) {
       this.config = { targets: configOrTargets };
     } else {
       this.config = configOrTargets;
     }
-    
+
     initIdleTracker((isIdle, duration) => {
       if (isIdle) {
         if (this.config.debug) console.log("%c💤 [Behavior.js] Status: Usuario Inactivo", "color: #9ca3af");
       } else {
         this.totalIdleAccumulated += duration;
-        if (this.config.debug) console.log(`%c✨ [Behavior.js] Status: Usuario regresó (Ausente: ${(duration/1000).toFixed(2)}s)`, "color: #10b981");
+        if (this.config.debug) console.log(`%c✨ [Behavior.js] Status: Usuario regresó (Ausente: ${(duration / 1000).toFixed(2)}s)`, "color: #10b981");
       }
     });
 
@@ -130,17 +110,19 @@ export class BehaviorTracker {
       },
       timestamp: new Date().toISOString()
     };
-    
+
     this.sessionLogs.push(entry);
-    
+
     if (this.config.debug) {
-        const color = type === 'missclick' ? '#ff4757' : type === 'tta' ? '#2ed573' : '#1e90ff';
-        console.log(`%c📊 [Behavior.js] ${type.toUpperCase()}:`, `color: ${color}; font-weight: bold;`, data);
+      const color = type === 'missclick' ? '#ff4757' : type === 'tta' ? '#2ed573' : '#1e90ff';
+      console.log(`%c📊 [Behavior.js] ${type.toUpperCase()}:`, `color: ${color}; font-weight: bold;`, data);
     }
   }
 
   public async sendReport(): Promise<void> {
     if (this.sessionLogs.length === 0) return;
+
+    const loadMetrics = getNavigationMetrics();
 
     const ttaEvents = this.sessionLogs.filter(l => l.type === 'tta');
     const avgDiscovery = ttaEvents.length > 0 ? ttaEvents.reduce((acc, curr) => acc + curr.visualDiscoveryMs, 0) / ttaEvents.length : 0;
@@ -154,6 +136,8 @@ export class BehaviorTracker {
         userAgent: navigator.userAgent
       },
       summary: {
+        pageLoadTimeSeconds: Number((this.startTime / 1000).toFixed(2)),
+        domInteractiveMs: loadMetrics.domInteractiveMs,
         totalTimeSeconds: Number(((performance.now() - this.startTime) / 1000).toFixed(2)),
         totalIdleTimeMs: Math.round(this.totalIdleAccumulated),
         totalEvents: this.sessionLogs.length,
@@ -163,44 +147,52 @@ export class BehaviorTracker {
         avgVisualDiscoveryMs: Math.round(avgDiscovery),
         avgCognitiveHesitationMs: Math.round(avgHesitation)
       },
-      events: this.sessionLogs 
+      events: this.sessionLogs
     };
 
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const fileName = `session-${Date.now()}.json`;
 
+    // --- ENVÍO A PROVIDERS ---
     if (this.config.providers) {
-      if (this.config.providers.discord) {
+      const { discord, telegram, slack } = this.config.providers;
+
+      if (discord) {
         const fd = new FormData();
-        fd.append('content', `📊 **Behavior.js:** Nueva sesión de ${report.metadata.screenSize}`);
+        fd.append('content', `📊 **Behavior.js:** Sesión en ${window.location.hostname}\nCarga: ${report.summary.pageLoadTimeSeconds}ms`);
         fd.append('file', blob, fileName);
-        fetch(this.config.providers.discord, { method: 'POST', body: fd, keepalive: true });
+        fetch(discord, { method: 'POST', body: fd, keepalive: true });
       }
 
-      if (this.config.providers.telegram) {
-        const { token, chatId } = this.config.providers.telegram;
+      /*if (telegram) {
+        const { token, chatId } = telegram;
         const fd = new FormData();
         fd.append('chat_id', chatId);
         fd.append('document', blob, fileName);
-        fd.append('caption', `📊 *Behavior.js:* Nueva sesión\nAcciones: ${report.summary.successfulActionsCount}`);
+        fd.append('caption', `📊 *Behavior.js:* Nueva sesión\nAcciones: ${report.summary.successfulActionsCount}\nLoad: ${report.summary.pageLoadTimeSeconds}ms`);
         fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: fd, keepalive: true });
       }
 
-      if (this.config.providers.slack) {
-        fetch(this.config.providers.slack, {
+      if (slack) {
+        fetch(slack, {
           method: 'POST',
-          body: JSON.stringify({ text: `📊 *Behavior.js*: Nueva sesión detectada en ${window.location.hostname}` }),
+          body: JSON.stringify({ text: `📊 *Behavior.js*: Sesión en ${window.location.hostname} (Load: ${report.summary.pageLoadTimeSeconds}ms)` }),
           keepalive: true
         });
-      }
+      }*/
     }
 
     try {
       const history = JSON.parse(localStorage.getItem('behavior_history') || '[]');
       history.push(report);
       localStorage.setItem('behavior_history', JSON.stringify(history.slice(-10)));
-    } catch (e) {}
+    } catch (e) {
+      if (this.config.debug) 
+        console.warn("⚠️ No se pudo guardar en localStorage.");
+    }
 
     if (this.config.debug) console.log("✅ Reporte procesado y enviado.");
+    
+    this.sessionLogs = [];
   }
 }

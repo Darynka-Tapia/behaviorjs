@@ -1,22 +1,14 @@
-// src/metrics/tta.ts
-
-// Registros temporales
 const hoverRegistry: Record<string, number> = {};
 const discoveryRegistry: Record<string, number> = {};
 
-/**
- * Registra el inicio del hover. 
- * Si es la primera vez que toca el target, sella el tiempo de descubrimiento.
- */
+
 export const trackHoverStart = (targetName: string, sessionStartTime: number) => {
   const now = performance.now();
   
-  // 1. SELLADO DE DESCUBRIMIENTO: Solo se guarda la primera vez que ocurre
   if (!discoveryRegistry[targetName]) {
     discoveryRegistry[targetName] = Math.round(now - sessionStartTime);
   }
   
-  // 2. REGISTRO DE HOVER: Se actualiza para medir la duda del último movimiento
   hoverRegistry[targetName] = now;
 };
 
@@ -36,28 +28,25 @@ export const calculateTTA = (
     if (container) {
       const endTime = performance.now();
       
-      // --- LÓGICA DE TIEMPOS ---
       
-      // Recuperamos el descubrimiento que sellamos en el mouseover
+      // We retrieve the discovery we marked on the mouseover
       const visualDiscoveryMs = discoveryRegistry[name] || 0;
 
-      // Calculamos la duda (Hesitation)
+      // We calculate the doubt (Hesitation)
       const startHoverTime = hoverRegistry[name];
       let cognitiveHesitation = startHoverTime ? Math.round(endTime - startHoverTime) : 0;
       
-      // Filtro de ruido: Si la duda es > 15s, probablemente no es duda real
+      // We filter out noise: If the doubt is > 15s, it's likely not a real doubt
       if (cognitiveHesitation > 15000) {
         cognitiveHesitation = 0;
       }
 
-      // Tiempo total de la acción
+      // Total time of the action
       const totalTTA = Math.round(endTime - startTime);
 
-      // Limpieza de registros para este target
       delete hoverRegistry[name];
       delete discoveryRegistry[name];
 
-      // --- ANÁLISIS DE DISEÑO ---
       const getStyleMetrics = (el: HTMLElement) => {
         const style = window.getComputedStyle(el);
         const hasShadow = style.boxShadow !== 'none' && style.boxShadow !== 'rgba(0, 0, 0, 0) 0px 0px 0px 0px';
@@ -86,7 +75,7 @@ export const calculateTTA = (
       return {
         action: name,
         totalTTAMs: totalTTA,
-        visualDiscoveryMs: visualDiscoveryMs, // <--- Sella el hallazgo visual real
+        visualDiscoveryMs: visualDiscoveryMs,
         cognitiveHesitationMs: cognitiveHesitation,
 
         element: {

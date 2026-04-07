@@ -1,7 +1,7 @@
 let lastClickTime = 0;
 let clickCount = 0;
 let lastTarget: HTMLElement | null = null;
-// Guardamos la referencia al último objeto de missclick generado
+
 let lastGeneratedMissClick: any = null; 
 const SESSION_THRESHOLD = 2000; // 2 segundos para separar ráfagas
 
@@ -9,21 +9,20 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
   const target = event.target as HTMLElement;
   const now = Date.now();
 
-  // 1. Lógica de Rage Click y Acumulación
+
   const isSameTarget = target === lastTarget;
   const isWithinSession = (now - lastClickTime) < SESSION_THRESHOLD;
 
   if (isSameTarget && (now - lastClickTime) < 500) {
     clickCount++;
   } else if (!isSameTarget || !isWithinSession) {
-    // Si cambió el target o pasó mucho tiempo, reseteamos contador
+
     clickCount = 1;
   } else {
-    // Es el mismo target dentro de la sesión, pero no necesariamente un "rage" (clic lento)
+
     clickCount++;
   }
 
-  // 2. Filtros de exclusión (Se mantienen igual)
   const isNative = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
   const isCustomTarget = targets.some(name => target.closest(`[data-behavior="${name}"]`));
   const isExplicitlyInteractive = target.closest('[data-behavior="interactive"]');
@@ -33,18 +32,14 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     return null;
   }
 
-  // Si es el mismo elemento y estamos dentro del umbral de tiempo, 
-  // actualizamos el objeto anterior en lugar de crear uno nuevo
   if (isSameTarget && isWithinSession && lastGeneratedMissClick) {
-    lastGeneratedMissClick.timestamp = now; // Actualizamos al último clic
+    lastGeneratedMissClick.timestamp = now; 
     lastGeneratedMissClick.behavior.clickSequence = clickCount;
     lastGeneratedMissClick.behavior.isRageClick = clickCount >= 3;
     
-    // Devolvemos un flag o el objeto con una propiedad 'updated' 
     return { ...lastGeneratedMissClick, isUpdate: true };
   }
 
-  // --- FUNCIÓN DE ANÁLISIS REUTILIZABLE ---
   const getStyleMetrics = (el: HTMLElement) => {
     const style = window.getComputedStyle(el);
     const hasShadow = style.boxShadow !== 'none' && style.boxShadow !== 'rgba(0, 0, 0, 0) 0px 0px 0px 0px';
@@ -65,7 +60,6 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     };
   };
 
-  // 3. LÓGICA DE PRIORIDAD (Hijo vs Padre)
   const childMetrics = getStyleMetrics(target);
   let finalMetrics = childMetrics;
   let measuredFromParent = false;
@@ -80,7 +74,6 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     }
   }
 
-  // 4. CREACIÓN DE NUEVO EVENTO
   const newMissClick = {
     type: 'missclick',
     timestamp: now,
@@ -113,7 +106,6 @@ export const trackMissClick = (event: MouseEvent, targets: string[]) => {
     location: { x: event.clientX, y: event.clientY }
   };
 
-  // Guardamos referencia y actualizamos variables de control
   lastClickTime = now;
   lastTarget = target;
   lastGeneratedMissClick = newMissClick;

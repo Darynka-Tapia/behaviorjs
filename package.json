@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "",
   "keywords": [
-    "user-behavior-analysis"
+    "user-behavior-analysis", 
+    "hci",
+    "ux-analytics",
+    "interaction-tracking",
+    "frontend-monitoring"
   ],
   "license": "MIT",
-  "author": "abril-tapia",
+  "author": "Darynka Tapia",
   "type": "module",
   "main": "./dist/index.cjs", 
   "module": "./dist/index.js",
@@ -21,6 +25,14 @@
   "directories": {
     "example": "examples"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Darynka-Tapia/behaviorjs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Darynka-Tapia/behaviorjs/issues"
+  },
+  "homepage": "https://github.com/Darynka-Tapia/behaviorjs#readme",
   "scripts": {
     "dev": "tsup src/index.ts --format cjs,esm --watch --dts",
     "build": "tsup src/index.ts --format cjs,esm --clean --dts",
